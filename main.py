@@ -35,6 +35,15 @@ ROUND_START_DELAY = 180
 KO_DELAY = 150
 WIN_ROUNDS = 2
 
+# ---------- Block balance ----------
+BLOCK_CHIP_MULTIPLIER = 0.25      # blocked attacks still deal 25% damage
+BLOCK_STAMINA_DRAIN = 0.55        # stamina drained every frame while blocking
+BLOCK_GUARD_DRAIN = 0.35          # guard meter drained every frame while blocking
+BLOCK_STUN_FRAMES = 10            # short delay after blocking a hit
+GUARD_BREAK_STUN_FRAMES = 60      # stun after guard breaks
+MAX_GUARD = 100.0
+
+
 STATE_TITLE = "title"
 STATE_SELECT = "select"
 STATE_FIGHT = "fight"
@@ -153,6 +162,25 @@ def draw_parallax_background(surface, camera_offset=0):
     draw_layer(mid_skyline, 0.15)
     draw_layer(fore_skyline, 0.35)
     pygame.draw.rect(surface, (25, 25, 35), (0, HEIGHT - 50, WIDTH, 50))
+
+
+# ---------- Sprite helpers ----------
+def load_sprite_strip(path, frame_count=4, target_height=150):
+    try:
+        sheet = pygame.image.load(path).convert_alpha()
+    except pygame.error:
+        return []
+    frame_width = sheet.get_width() // frame_count
+    frame_height = sheet.get_height()
+    frames = []
+    for i in range(frame_count):
+        frame = sheet.subsurface((i * frame_width, 0, frame_width, frame_height))
+        scale = target_height / frame_height
+        new_width = max(1, int(frame_width * scale))
+        frames.append(pygame.transform.scale(frame, (new_width, target_height)))
+    return frames
+
+IDLE_FRAMES = load_sprite_strip("assets/idle.png", 4, 150)
 
 # ---------- Character data ----------
 CHARACTERS = [
@@ -290,6 +318,9 @@ class Fighter:
         self.health = 100
         self.stamina = 100.0
         self.ultimate_meter = 0
+        self.guard_meter = MAX_GUARD
+        self.stun_timer = 0
+        self.block_stun_timer = 0
 
         self.attacking = False
         self.kicking = False
@@ -326,21 +357,29 @@ class Fighter:
             self.vel_y = 0
             self.jumping = False
 
-        move_multiplier = 0.5 if (self.attacking or self.kicking or self.using_ultimate) else 1.0
+        stunned = self.stun_timer > 0 or self.block_stun_timer > 0
+        move_multiplier = 0.5 if (self.attacking or self.kicking or self.using_ultimate or stunned) else 1.0
         current_speed = self.speed * move_multiplier
 
-        # Holding backward blocks, but it does NOT stop movement.
-        # Pressing down crouches, but it does NOT stop movement either.
+        # Directional block: block only happens while holding away from the opponent.
+        # It now costs stamina + guard, so players cannot hold it forever.
         moving_back = (left and self.facing_right) or (right and not self.facing_right)
-        self.blocking = moving_back and not self.jumping and not self.using_ultimate
-        self.crouching = down and not self.jumping and not self.using_ultimate
+        can_block = (
+            moving_back
+            and not self.jumping
+            and not self.using_ultimate
+            and not stunned
+            and self.stamina > 5
+            and self.guard_meter > 0
+        )
+        self.blocking = can_block
+        self.crouching = down and not self.jumping and not self.using_ultimate and not stunned
 
-        # Slightly slow crouching/blocking instead of freezing the player.
         if self.blocking or self.crouching:
             current_speed *= 0.65
 
         is_moving = False
-        if not self.using_ultimate:
+        if not self.using_ultimate and not stunned:
             if left:
                 self.rect.x -= current_speed
                 is_moving = True
@@ -353,7 +392,7 @@ class Fighter:
         else:
             self.walk_cycle *= 0.8
 
-        if up and not self.jumping and not self.crouching and not self.using_ultimate:
+        if up and not self.jumping and not self.crouching and not self.using_ultimate and not stunned:
             self.vel_y = -23
             self.jumping = True
 
@@ -365,26 +404,29 @@ class Fighter:
         if not self.dashing:
             self.facing_right = self.rect.centerx < other_fighter.rect.centerx
 
+    def can_act(self):
+        return self.stun_timer <= 0 and self.block_stun_timer <= 0
+
     def attack(self):
-        if not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
+        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
             self.attacking = True
             self.attack_timer = 15
             play_sound(SND_PUNCH)
 
     def kick(self):
-        if not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
+        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
             self.kicking = True
             self.kick_timer = 20
             play_sound(SND_KICK)
 
     def low_attack(self):
-        if self.crouching and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
+        if self.can_act() and self.crouching and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
             self.low_attacking = True
             self.low_attack_timer = 18
             play_sound(SND_KICK)
 
     def dash(self, moving_left, moving_right):
-        if not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.crouching, self.using_ultimate]) and self.stamina >= self.dash_cost:
+        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.crouching, self.using_ultimate]) and self.stamina >= self.dash_cost:
             self.stamina -= self.dash_cost
             self.dashing = True
             self.dash_timer = 10
@@ -401,7 +443,7 @@ class Fighter:
                 self.vel_x = dash_power if self.facing_right else -dash_power
 
     def can_use_ultimate(self):
-        return self.ultimate_meter >= 100 and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.using_ultimate])
+        return self.can_act() and self.ultimate_meter >= 100 and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.using_ultimate])
 
     def use_ultimate(self, projectiles):
         if not self.can_use_ultimate():
@@ -447,6 +489,27 @@ class Fighter:
 
     def update(self):
         self.anim_time += 0.12
+
+        if self.stun_timer > 0:
+            self.stun_timer -= 1
+            self.blocking = False
+            self.attacking = False
+            self.kicking = False
+            self.low_attacking = False
+
+        if self.block_stun_timer > 0:
+            self.block_stun_timer -= 1
+
+        # Blocking is strong, but not free: it drains stamina and guard.
+        if self.blocking:
+            self.stamina = max(0, self.stamina - BLOCK_STAMINA_DRAIN)
+            self.guard_meter = max(0, self.guard_meter - BLOCK_GUARD_DRAIN)
+            if self.stamina <= 0 or self.guard_meter <= 0:
+                self.guard_break()
+        else:
+            # Guard recovers slowly when not blocking.
+            if self.guard_meter < MAX_GUARD and self.stun_timer <= 0:
+                self.guard_meter = min(MAX_GUARD, self.guard_meter + 0.45)
 
         regen = 0.4
         if self.special == "stamina_regen":
@@ -494,7 +557,87 @@ class Fighter:
             if self.combo_timer == 0:
                 self.combo_count = 0
 
+    def guard_break(self):
+        self.blocking = False
+        self.stun_timer = GUARD_BREAK_STUN_FRAMES
+        self.block_stun_timer = 0
+        self.hit_effect_timer = 12
+        self.hit_cooldown = 25
+        self.stamina = 0
+        self.guard_meter = 0
+        self.attacking = False
+        self.kicking = False
+        self.low_attacking = False
+        create_hit_spark(self.rect.centerx, self.rect.centery, ORANGE)
+        start_screen_shake(12, 8)
+        start_hit_pause(5)
+
     def draw(self, surface):
+        if IDLE_FRAMES:
+            punch_rect = None
+            kick_rect = None
+            ultimate_rect = None
+            low_attack_rect = None
+
+            if self.attacking:
+                reach = 80
+                if self.facing_right:
+                    punch_rect = pygame.Rect(self.rect.centerx, self.rect.y + 45, reach, 35)
+                else:
+                    punch_rect = pygame.Rect(self.rect.centerx - reach, self.rect.y + 45, reach, 35)
+
+            if self.kicking:
+                reach = 95
+                if self.facing_right:
+                    kick_rect = pygame.Rect(self.rect.centerx, self.rect.y + 80, reach, 35)
+                else:
+                    kick_rect = pygame.Rect(self.rect.centerx - reach, self.rect.y + 80, reach, 35)
+
+            if self.low_attacking:
+                reach = 85
+                if self.facing_right:
+                    low_attack_rect = pygame.Rect(self.rect.centerx, self.rect.bottom - 40, reach, 30)
+                else:
+                    low_attack_rect = pygame.Rect(self.rect.centerx - reach, self.rect.bottom - 40, reach, 30)
+
+            if self.using_ultimate and self.ultimate_type == "dash_strike":
+                ultimate_rect = pygame.Rect(self.rect.x - 8, self.rect.y, self.rect.width + 16, self.rect.height)
+
+            frame_index = int(self.anim_time * 8) % len(IDLE_FRAMES)
+            img = IDLE_FRAMES[frame_index]
+            if not self.facing_right:
+                img = pygame.transform.flip(img, True, False)
+
+            draw_x = self.rect.centerx - img.get_width() // 2
+            draw_y = self.rect.bottom - img.get_height() + 8
+
+            pygame.draw.ellipse(surface, (0, 0, 0), (self.rect.centerx - 38, self.rect.bottom - 8, 76, 16))
+
+            if self.hit_effect_timer > 0:
+                flash = img.copy()
+                flash.fill((255, 255, 255, 110), special_flags=pygame.BLEND_RGBA_ADD)
+                surface.blit(flash, (draw_x, draw_y))
+            else:
+                surface.blit(img, (draw_x, draw_y))
+
+            if self.blocking:
+                pygame.draw.arc(surface, CYAN, (self.rect.x - 15, self.rect.y + 10, self.rect.width + 30, self.rect.height - 20), 1.2, 5.0, 4)
+            if self.stun_timer > 0:
+                stun_text = font_small.render("GUARD BREAK!", True, ORANGE)
+                surface.blit(stun_text, (self.rect.centerx - stun_text.get_width() // 2, self.rect.y - 20))
+            if self.attacking and punch_rect:
+                pygame.draw.circle(surface, self.accent, punch_rect.center, 10)
+            if self.kicking and kick_rect:
+                pygame.draw.circle(surface, self.accent, kick_rect.center, 10)
+            if self.low_attacking and low_attack_rect:
+                pygame.draw.circle(surface, self.accent, low_attack_rect.center, 8)
+            if self.using_ultimate and self.ultimate_type == "healing_burst":
+                pygame.draw.circle(surface, GREEN, self.rect.center, 60, 4)
+            if self.using_ultimate and self.ultimate_type == "dash_strike":
+                pygame.draw.rect(surface, CYAN, self.rect.inflate(30, 30), 4, border_radius=8)
+
+            return punch_rect, kick_rect, ultimate_rect, low_attack_rect
+
         main_color = WHITE if self.hit_effect_timer > 0 else self.color
         skin = WHITE if self.hit_effect_timer > 0 else self.skin_color
         accent_color = WHITE if self.hit_effect_timer > 0 else self.accent
@@ -761,18 +904,25 @@ def check_hit(dealer, receiver, hitbox, damage, knockback):
         return
 
     if receiver.blocking:
-        blocked_damage = damage * 0.3
-        receiver.health -= blocked_damage
-        receiver.stamina -= damage * 0.5
-        receiver.hit_cooldown = 10
+        chip_damage = damage * BLOCK_CHIP_MULTIPLIER
+        receiver.health -= chip_damage
+        receiver.stamina = max(0, receiver.stamina - damage * 1.0)
+        receiver.guard_meter = max(0, receiver.guard_meter - damage * 2.0)
+        receiver.hit_cooldown = 13
+        receiver.block_stun_timer = BLOCK_STUN_FRAMES
+        receiver.vel_x = (knockback * 0.35) if dealer.rect.centerx < receiver.rect.centerx else -(knockback * 0.35)
         create_hit_spark(receiver.rect.centerx, receiver.rect.centery, PURPLE)
 
-        gain_ultimate(dealer, 6)
+        gain_ultimate(dealer, 7)
         gain_ultimate(receiver, 5)
 
         start_hit_pause(2)
-        start_screen_shake(4, 2)
+        start_screen_shake(5, 3)
         play_sound(SND_BLOCK)
+
+        if receiver.stamina <= 0 or receiver.guard_meter <= 0:
+            receiver.guard_break()
+
     else:
         receiver.health -= damage
         receiver.hit_cooldown = 20
@@ -1204,10 +1354,12 @@ def draw_fight_scene(surface):
 
     pygame.draw.rect(surface, GREEN, (50, 30, p1_health_val * 4, 20), border_radius=5)
     pygame.draw.rect(surface, YELLOW, (50, 60, p1_stamina_val * 2, 10), border_radius=3)
+    pygame.draw.rect(surface, ORANGE, (50, 88, max(0, min(100, p1.guard_meter)) * 2, 7), border_radius=3)
     pygame.draw.rect(surface, CYAN, (50, 75, p1_ult_val * 2, 8), border_radius=3)
 
     pygame.draw.rect(surface, RED, (550 + (400 - p2_health_val * 4), 30, p2_health_val * 4, 20), border_radius=5)
     pygame.draw.rect(surface, BLUE, (750 + (200 - p2_stamina_val * 2), 60, p2_stamina_val * 2, 10), border_radius=3)
+    pygame.draw.rect(surface, ORANGE, (750 + (200 - max(0, min(100, p2.guard_meter)) * 2), 88, max(0, min(100, p2.guard_meter)) * 2, 7), border_radius=3)
     pygame.draw.rect(surface, PURPLE, (750 + (200 - p2_ult_val * 2), 75, p2_ult_val * 2, 8), border_radius=3)
 
     p1_name = font_small.render(p1.character_name, True, WHITE)

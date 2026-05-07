@@ -4,6 +4,7 @@ import math
 import random
 import array
 import asyncio
+import os
 
 pygame.init()
 
@@ -98,22 +99,111 @@ SND_MENU = make_tone(600, 60, 0.18)
 SND_ROUND = make_tone(450, 180, 0.22)
 SND_KO = make_tone(95, 400, 0.45)
 
+# ---------- Stage / map data ----------
+STAGES = [
+    {
+        "name": "Sunset City",
+        "sky_top": (44, 44, 90),
+        "sky_bottom": (255, 121, 63),
+        "moon": (255, 255, 230),
+        "far": (30, 30, 50),
+        "mid": (40, 40, 65),
+        "fore": (50, 50, 80),
+        "ground": (25, 25, 35),
+        "window": (241, 196, 15),
+        "extra": "city",
+    },
+    {
+        "name": "Night Rooftop",
+        "sky_top": (5, 8, 25),
+        "sky_bottom": (20, 25, 55),
+        "moon": (220, 230, 255),
+        "far": (10, 14, 35),
+        "mid": (20, 24, 48),
+        "fore": (30, 34, 60),
+        "ground": (18, 18, 28),
+        "window": (90, 180, 255),
+        "extra": "stars",
+    },
+    {
+        "name": "Training Dojo",
+        "sky_top": (95, 55, 35),
+        "sky_bottom": (175, 115, 70),
+        "moon": (255, 230, 180),
+        "far": (90, 50, 35),
+        "mid": (115, 65, 40),
+        "fore": (145, 80, 45),
+        "ground": (80, 45, 28),
+        "window": (255, 205, 120),
+        "extra": "dojo",
+    },
+    {
+        "name": "Cyber Arena",
+        "sky_top": (8, 0, 30),
+        "sky_bottom": (40, 0, 70),
+        "moon": (0, 255, 255),
+        "far": (20, 0, 55),
+        "mid": (35, 0, 80),
+        "fore": (55, 0, 105),
+        "ground": (15, 15, 25),
+        "window": (0, 255, 255),
+        "extra": "cyber",
+    },
+    {
+        "name": "Street Market",
+        "sky_top": (80, 160, 230),
+        "sky_bottom": (225, 205, 150),
+        "moon": (255, 245, 190),
+        "far": (70, 80, 90),
+        "mid": (90, 100, 105),
+        "fore": (110, 105, 95),
+        "ground": (125, 95, 60),
+        "window": (255, 220, 120),
+        "extra": "image",
+        "image": "assets/street_market.png",
+    },
+]
+
+stage_selection = 0
+current_stage = 0
+
+
 # ---------- Background ----------
-def create_sky_gradient():
+def create_sky_gradient(stage=None):
+    if stage is None:
+        stage = STAGES[current_stage] if "STAGES" in globals() else {
+            "sky_top": (44, 44, 90),
+            "sky_bottom": (255, 121, 63),
+            "moon": (255, 255, 230),
+            "extra": "city",
+        }
+
     sky = pygame.Surface((WIDTH, HEIGHT))
+    top = stage["sky_top"]
+    bottom = stage["sky_bottom"]
+
     for y in range(HEIGHT):
         ratio = y / HEIGHT
-        r = int(44 * (1 - ratio) + 255 * ratio)
-        g = int(44 * (1 - ratio) + 121 * ratio)
-        b = int(44 * (1 - ratio) + 63 * ratio)
+        r = int(top[0] * (1 - ratio) + bottom[0] * ratio)
+        g = int(top[1] * (1 - ratio) + bottom[1] * ratio)
+        b = int(top[2] * (1 - ratio) + bottom[2] * ratio)
         pygame.draw.line(sky, (r, g, b), (0, y), (WIDTH, y))
 
-    pygame.draw.circle(sky, (255, 255, 230), (800, 120), 40)
-    for r in range(41, 60):
-        alpha = int(50 * (1 - (r - 41) / 19))
-        glow_surf = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
-        pygame.draw.circle(glow_surf, (255, 255, 200, alpha), (r, r), r)
-        sky.blit(glow_surf, (800 - r, 120 - r))
+    # moon / sun
+    pygame.draw.circle(sky, stage["moon"], (800, 120), 40)
+    for rad in range(41, 60):
+        alpha = int(50 * (1 - (rad - 41) / 19))
+        glow_surf = pygame.Surface((rad * 2, rad * 2), pygame.SRCALPHA)
+        pygame.draw.circle(glow_surf, (*stage["moon"], alpha), (rad, rad), rad)
+        sky.blit(glow_surf, (800 - rad, 120 - rad))
+
+    if stage.get("extra") == "stars":
+        random.seed(7)
+        for _ in range(80):
+            x = random.randint(0, WIDTH)
+            y = random.randint(20, 300)
+            pygame.draw.circle(sky, (230, 230, 255), (x, y), 1)
+
     return sky
 
 def generate_layer(total_width, min_h, max_h, color):
@@ -134,12 +224,37 @@ def generate_layer(total_width, min_h, max_h, color):
         x += w + random.randint(-10, 5)
     return layer
 
-sky_surface = create_sky_gradient()
-far_skyline = generate_layer(WIDTH * 2, 100, 200, (30, 30, 50))
-mid_skyline = generate_layer(WIDTH * 2, 180, 280, (40, 40, 65))
-fore_skyline = generate_layer(WIDTH * 2, 250, 380, (50, 50, 80))
+def load_stage_image(stage):
+    if stage.get("extra") != "image":
+        return None
+
+    image_path = stage.get("image", "")
+    if not os.path.exists(image_path):
+        return None
+
+    try:
+        img = pygame.image.load(image_path).convert()
+        return pygame.transform.scale(img, (WIDTH, HEIGHT))
+    except pygame.error:
+        return None
+
+def build_stage_surfaces():
+    stage = STAGES[current_stage]
+    return (
+        create_sky_gradient(stage),
+        generate_layer(WIDTH * 2, 100, 200, stage["far"]),
+        generate_layer(WIDTH * 2, 180, 280, stage["mid"]),
+        generate_layer(WIDTH * 2, 250, 380, stage["fore"]),
+        load_stage_image(stage),
+    )
+
+sky_surface, far_skyline, mid_skyline, fore_skyline, stage_image_surface = build_stage_surfaces()
 
 def draw_parallax_background(surface, camera_offset=0):
+    if stage_image_surface is not None:
+        surface.blit(stage_image_surface, (0, 0))
+        return
+
     surface.blit(sky_surface, (0, 0))
 
     def draw_layer(layer, multiplier):
@@ -155,13 +270,31 @@ def draw_parallax_background(surface, camera_offset=0):
             for wy in range(HEIGHT - 40 - b["h"], HEIGHT - 60, 40):
                 for wx in range(int(bx) + 10, int(bx) + b["w"] - 10, 20):
                     if win_idx < len(b["windows"]) and b["windows"][win_idx]:
-                        pygame.draw.rect(surface, (241, 196, 15), (wx, wy, 8, 12))
+                        pygame.draw.rect(surface, STAGES[current_stage]['window'], (wx, wy, 8, 12))
                     win_idx += 1
+
+    stage = STAGES[current_stage]
 
     draw_layer(far_skyline, 0.05)
     draw_layer(mid_skyline, 0.15)
     draw_layer(fore_skyline, 0.35)
-    pygame.draw.rect(surface, (25, 25, 35), (0, HEIGHT - 50, WIDTH, 50))
+
+    if stage.get("extra") == "dojo":
+        pygame.draw.rect(surface, (110, 62, 35), (0, HEIGHT - 190, WIDTH, 140))
+        for x in range(40, WIDTH, 140):
+            pygame.draw.rect(surface, (70, 35, 20), (x, HEIGHT - 190, 18, 140))
+        pygame.draw.circle(surface, (180, 35, 35), (WIDTH // 2, HEIGHT - 135), 36)
+        pygame.draw.circle(surface, (245, 235, 210), (WIDTH // 2, HEIGHT - 135), 24)
+    elif stage.get("extra") == "cyber":
+        for x in range(0, WIDTH, 80):
+            pygame.draw.line(surface, CYAN, (x + camera_offset % 80, HEIGHT - 50), (x + 30 + camera_offset % 80, HEIGHT), 2)
+        pygame.draw.rect(surface, (80, 0, 150), (0, HEIGHT - 54, WIDTH, 4))
+
+    pygame.draw.rect(surface, stage["ground"], (0, HEIGHT - 50, WIDTH, 50))
+
+    if stage.get("extra") == "cyber":
+        for x in range(0, WIDTH, 90):
+            pygame.draw.line(surface, CYAN, (x, HEIGHT - 28), (x + 45, HEIGHT - 28), 2)
 
 
 # ---------- Sprite helpers ----------
@@ -180,7 +313,54 @@ def load_sprite_strip(path, frame_count=4, target_height=150):
         frames.append(pygame.transform.scale(frame, (new_width, target_height)))
     return frames
 
+def load_single_sprite(paths, target_height=175):
+    # This loads your generated punch image.
+    # Put it in assets as punch.png, or rename the path below.
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                img = pygame.image.load(path).convert_alpha()
+
+                # If the image has a plain black background, this makes black transparent.
+                img.set_colorkey((0, 0, 0))
+
+                scale = target_height / img.get_height()
+                new_width = max(1, int(img.get_width() * scale))
+                return pygame.transform.scale(img, (new_width, target_height))
+            except pygame.error:
+                pass
+    return None
+
 IDLE_FRAMES = load_sprite_strip("assets/idle.png", 4, 150)
+PUNCH_FRAME = load_single_sprite([
+    "assets/punch.png",
+    "assets/punch_sprite.png",
+    "assets/a_single_frame_pixel_art_sprite_on_a_plain_black_b.png",
+], 175)
+
+KICK_FRAME = load_single_sprite([
+    "assets/kick.png",
+    "assets/kick_sprite.png",
+    "assets/a_single_frame_sprite_retro_pixel_art_scene_on_a_b.png",
+], 175)
+
+FIREBALL_FRAME = load_single_sprite([
+    "assets/fireball.png",
+    "assets/fireball_sprite.png",
+    "assets/a_clean_pixel_art_sprite_style_image_on_a_solid.png",
+], 175)
+
+CROUCH_FRAME = load_single_sprite([
+    "assets/crouch.png",
+    "assets/crouch_sprite.png",
+    "assets/a_dark_black_background_scene_with_a_pixel_art_spr.png",
+], 135)
+
+BLOCK_FRAME = load_single_sprite([
+    "assets/block.png",
+    "assets/block_sprite.png",
+    "assets/a_clean_pixel_art_sprite_illustration_on_a_transpa.png",
+], 160)
 
 # ---------- Character data ----------
 CHARACTERS = [
@@ -325,6 +505,7 @@ class Fighter:
         self.attacking = False
         self.kicking = False
         self.low_attacking = False
+        self.fireballing = False
         self.dashing = False
         self.blocking = False
         self.crouching = False
@@ -333,6 +514,7 @@ class Fighter:
         self.attack_timer = 0
         self.kick_timer = 0
         self.low_attack_timer = 0
+        self.fireball_timer = 0
         self.dash_timer = 0
         self.hit_cooldown = 0
         self.hit_effect_timer = 0
@@ -346,7 +528,7 @@ class Fighter:
         self.combo_count = 0
         self.combo_timer = 0
 
-    def move(self, left, right, up, down, other_fighter):
+    def move(self, left, right, up, down, other_fighter, block_key=False):
         self.vel_y += 1.5
         self.rect.y += self.vel_y
         self.rect.x += self.vel_x
@@ -365,7 +547,7 @@ class Fighter:
         # It now costs stamina + guard, so players cannot hold it forever.
         moving_back = (left and self.facing_right) or (right and not self.facing_right)
         can_block = (
-            moving_back
+            (moving_back or block_key)
             and not self.jumping
             and not self.using_ultimate
             and not stunned
@@ -373,7 +555,7 @@ class Fighter:
             and self.guard_meter > 0
         )
         self.blocking = can_block
-        self.crouching = down and not self.jumping and not self.using_ultimate and not stunned
+        self.crouching = down and not self.jumping and not self.using_ultimate and not stunned and not self.blocking
 
         if self.blocking or self.crouching:
             current_speed *= 0.65
@@ -408,25 +590,56 @@ class Fighter:
         return self.stun_timer <= 0 and self.block_stun_timer <= 0
 
     def attack(self):
-        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
+        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.fireballing, self.dashing, self.blocking, self.using_ultimate]):
             self.attacking = True
             self.attack_timer = 15
             play_sound(SND_PUNCH)
 
     def kick(self):
-        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
+        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.fireballing, self.dashing, self.blocking, self.using_ultimate]):
             self.kicking = True
             self.kick_timer = 20
             play_sound(SND_KICK)
 
     def low_attack(self):
-        if self.can_act() and self.crouching and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.blocking, self.using_ultimate]):
+        if self.can_act() and self.crouching and not any([self.attacking, self.kicking, self.low_attacking, self.fireballing, self.dashing, self.blocking, self.using_ultimate]):
             self.low_attacking = True
             self.low_attack_timer = 18
             play_sound(SND_KICK)
 
+    def shoot_fireball(self, projectiles):
+        if not self.can_act():
+            return
+        if any([self.attacking, self.kicking, self.low_attacking, self.fireballing, self.dashing, self.blocking, self.using_ultimate]):
+            return
+        if self.stamina < self.fireball_cost:
+            return
+
+        self.stamina -= self.fireball_cost
+        self.fireballing = True
+        self.fireball_timer = 18
+
+        fireball_speed = 14
+        fireball_w = 40
+        fireball_h = 20
+
+        if self.special == "strong_fireball":
+            fireball_speed = 16
+            fireball_w = 55
+            fireball_h = 24
+
+        start_x = self.rect.centerx + (35 if self.facing_right else -75)
+        projectiles.append({
+            "rect": pygame.Rect(start_x, self.rect.y + 45, fireball_w, fireball_h),
+            "vx": (1 if self.facing_right else -1) * fireball_speed,
+            "owner": self,
+            "damage": self.fireball_damage,
+            "kind": "normal",
+        })
+        play_sound(SND_FIREBALL)
+
     def dash(self, moving_left, moving_right):
-        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.crouching, self.using_ultimate]) and self.stamina >= self.dash_cost:
+        if self.can_act() and not any([self.attacking, self.kicking, self.low_attacking, self.fireballing, self.dashing, self.crouching, self.using_ultimate]) and self.stamina >= self.dash_cost:
             self.stamina -= self.dash_cost
             self.dashing = True
             self.dash_timer = 10
@@ -443,7 +656,7 @@ class Fighter:
                 self.vel_x = dash_power if self.facing_right else -dash_power
 
     def can_use_ultimate(self):
-        return self.can_act() and self.ultimate_meter >= 100 and not any([self.attacking, self.kicking, self.low_attacking, self.dashing, self.using_ultimate])
+        return self.can_act() and self.ultimate_meter >= 100 and not any([self.attacking, self.kicking, self.low_attacking, self.fireballing, self.dashing, self.using_ultimate])
 
     def use_ultimate(self, projectiles):
         if not self.can_use_ultimate():
@@ -496,6 +709,7 @@ class Fighter:
             self.attacking = False
             self.kicking = False
             self.low_attacking = False
+            self.fireballing = False
 
         if self.block_stun_timer > 0:
             self.block_stun_timer -= 1
@@ -532,6 +746,11 @@ class Fighter:
             self.low_attack_timer -= 1
             if self.low_attack_timer == 0:
                 self.low_attacking = False
+
+        if self.fireball_timer > 0:
+            self.fireball_timer -= 1
+            if self.fireball_timer == 0:
+                self.fireballing = False
 
         if self.dash_timer > 0:
             self.dash_timer -= 1
@@ -604,12 +823,70 @@ class Fighter:
                 ultimate_rect = pygame.Rect(self.rect.x - 8, self.rect.y, self.rect.width + 16, self.rect.height)
 
             frame_index = int(self.anim_time * 8) % len(IDLE_FRAMES)
-            img = IDLE_FRAMES[frame_index]
+
+            # Use generated attack pictures during attacks.
+            # Otherwise, keep using the normal idle sprite sheet.
+            using_punch_sprite = self.attacking and PUNCH_FRAME is not None
+            using_kick_sprite = self.kicking and KICK_FRAME is not None
+            using_fireball_sprite = self.fireballing and FIREBALL_FRAME is not None
+            using_block_sprite = self.blocking and BLOCK_FRAME is not None
+            using_crouch_sprite = (
+                self.crouching
+                and not self.low_attacking
+                and not self.attacking
+                and not self.kicking
+                and not self.fireballing
+                and CROUCH_FRAME is not None
+            )
+
+            if using_punch_sprite:
+                img = PUNCH_FRAME
+            elif using_kick_sprite:
+                img = KICK_FRAME
+            elif using_fireball_sprite:
+                img = FIREBALL_FRAME
+            elif using_block_sprite:
+                img = BLOCK_FRAME
+            elif using_crouch_sprite:
+                img = CROUCH_FRAME
+            else:
+                img = IDLE_FRAMES[frame_index]
+
             if not self.facing_right:
                 img = pygame.transform.flip(img, True, False)
 
-            draw_x = self.rect.centerx - img.get_width() // 2
-            draw_y = self.rect.bottom - img.get_height() + 8
+            if using_punch_sprite:
+                # The punch image is wider than the normal idle frame, so anchor it
+                # so the fighter body stays around the same spot while the fist extends.
+                if self.facing_right:
+                    draw_x = self.rect.centerx - int(img.get_width() * 0.42)
+                else:
+                    draw_x = self.rect.centerx - int(img.get_width() * 0.58)
+                draw_y = self.rect.bottom - img.get_height() + 18
+            elif using_kick_sprite:
+                # The kick image is very wide, so anchor it around the fighter body
+                # and let the leg extend outward.
+                if self.facing_right:
+                    draw_x = self.rect.centerx - int(img.get_width() * 0.32)
+                else:
+                    draw_x = self.rect.centerx - int(img.get_width() * 0.68)
+                draw_y = self.rect.bottom - img.get_height() + 18
+            elif using_fireball_sprite:
+                # Fireball stance is wider than idle, but should stay centered on the fighter.
+                if self.facing_right:
+                    draw_x = self.rect.centerx - int(img.get_width() * 0.38)
+                else:
+                    draw_x = self.rect.centerx - int(img.get_width() * 0.62)
+                draw_y = self.rect.bottom - img.get_height() + 18
+            elif using_block_sprite:
+                draw_x = self.rect.centerx - img.get_width() // 2
+                draw_y = self.rect.bottom - img.get_height() + 8
+            elif using_crouch_sprite:
+                draw_x = self.rect.centerx - img.get_width() // 2
+                draw_y = self.rect.bottom - img.get_height() + 12
+            else:
+                draw_x = self.rect.centerx - img.get_width() // 2
+                draw_y = self.rect.bottom - img.get_height() + 8
 
             pygame.draw.ellipse(surface, (0, 0, 0), (self.rect.centerx - 38, self.rect.bottom - 8, 76, 16))
 
@@ -620,14 +897,14 @@ class Fighter:
             else:
                 surface.blit(img, (draw_x, draw_y))
 
-            if self.blocking:
+            if self.blocking and not using_block_sprite:
                 pygame.draw.arc(surface, CYAN, (self.rect.x - 15, self.rect.y + 10, self.rect.width + 30, self.rect.height - 20), 1.2, 5.0, 4)
             if self.stun_timer > 0:
                 stun_text = font_small.render("GUARD BREAK!", True, ORANGE)
                 surface.blit(stun_text, (self.rect.centerx - stun_text.get_width() // 2, self.rect.y - 20))
-            if self.attacking and punch_rect:
+            if self.attacking and punch_rect and not using_punch_sprite:
                 pygame.draw.circle(surface, self.accent, punch_rect.center, 10)
-            if self.kicking and kick_rect:
+            if self.kicking and kick_rect and not using_kick_sprite:
                 pygame.draw.circle(surface, self.accent, kick_rect.center, 10)
             if self.low_attacking and low_attack_rect:
                 pygame.draw.circle(surface, self.accent, low_attack_rect.center, 8)
@@ -802,8 +1079,14 @@ def apply_selected_characters():
     p1 = Fighter(200, HEIGHT - 180, CHARACTERS[p1_selection], True)
     p2 = Fighter(700, HEIGHT - 180, CHARACTERS[p2_selection], False)
 
+def refresh_stage():
+    global sky_surface, far_skyline, mid_skyline, fore_skyline, stage_image_surface
+    sky_surface, far_skyline, mid_skyline, fore_skyline, stage_image_surface = build_stage_surfaces()
+
 def setup_new_match():
-    global p1_rounds, p2_rounds, current_round, winner_text
+    global p1_rounds, p2_rounds, current_round, winner_text, current_stage
+    current_stage = stage_selection
+    refresh_stage()
     p1_rounds = 0
     p2_rounds = 0
     current_round = 1
@@ -1006,7 +1289,7 @@ def cpu_control(cpu, target):
     if not cpu.jumping and random.random() < settings["jump_chance"]:
         up = True
 
-    cpu.move(left, right, up, down, target)
+    cpu.move(left, right, up, down, target, False)
 
     if cpu_action_timer > 0:
         return
@@ -1031,24 +1314,7 @@ def cpu_control(cpu, target):
         return
 
     if abs_dist < 280 and random.random() < settings["fireball_chance"] and cpu.stamina >= cpu.fireball_cost:
-        cpu.stamina -= cpu.fireball_cost
-        fireball_speed = 14
-        fireball_w = 40
-        fireball_h = 20
-
-        if cpu.special == "strong_fireball":
-            fireball_speed = 16
-            fireball_w = 55
-            fireball_h = 24
-
-        fireballs.append({
-            "rect": pygame.Rect(cpu.rect.centerx, cpu.rect.y + 40, fireball_w, fireball_h),
-            "vx": (1 if cpu.facing_right else -1) * fireball_speed,
-            "owner": cpu,
-            "damage": cpu.fireball_damage,
-            "kind": "normal",
-        })
-        play_sound(SND_FIREBALL)
+        cpu.shoot_fireball(fireballs)
         cpu_action_timer = random.randint(settings["action_min"] + 8, settings["action_max"] + 18)
 
 # ---------- Drawing ----------
@@ -1102,16 +1368,18 @@ def draw_character_select(surface):
     info2 = font_small.render("P2: LEFT / RIGHT to choose, P to lock", True, LIGHT_GRAY)
     mode_text = font_medium.render(f"MODE: {'VS CPU' if vs_cpu else '2 PLAYER'}   |   M TO CHANGE", True, CYAN)
     diff_text = font_medium.render(f"CPU DIFFICULTY: {cpu_difficulty}   |   N TO CHANGE", True, YELLOW if vs_cpu else LIGHT_GRAY)
+    stage_text = font_medium.render(f"MAP: {STAGES[stage_selection]['name']}   |   Q / E TO CHANGE", True, ORANGE)
 
     surface.blit(title, (WIDTH // 2 - title.get_width() // 2, 35))
     surface.blit(info1, (WIDTH // 2 - info1.get_width() // 2, 90))
     surface.blit(info2, (WIDTH // 2 - info2.get_width() // 2, 112))
     surface.blit(mode_text, (WIDTH // 2 - mode_text.get_width() // 2, 140))
     surface.blit(diff_text, (WIDTH // 2 - diff_text.get_width() // 2, 170))
+    surface.blit(stage_text, (WIDTH // 2 - stage_text.get_width() // 2, 195))
 
     start_x = 90
     gap = 30
-    y = 205
+    y = 230
 
     for i, char in enumerate(CHARACTERS):
         x = start_x + i * (180 + gap)
@@ -1135,6 +1403,20 @@ def draw_character_select(surface):
 
         draw_character_card(surface, x, y, char, selected, locked, label)
 
+    # Small map selector preview
+    preview_y = 500
+    preview_w = 150
+    preview_h = 34
+    preview_x = WIDTH // 2 - ((preview_w + 8) * len(STAGES)) // 2
+    for i, stage in enumerate(STAGES):
+        x = preview_x + i * (preview_w + 8)
+        fill = stage["sky_bottom"]
+        border = YELLOW if i == stage_selection else LIGHT_GRAY
+        pygame.draw.rect(surface, fill, (x, preview_y, preview_w, preview_h), border_radius=7)
+        pygame.draw.rect(surface, border, (x, preview_y, preview_w, preview_h), 2, border_radius=7)
+        label = font_small.render(stage["name"], True, WHITE)
+        surface.blit(label, (x + preview_w // 2 - label.get_width() // 2, preview_y + 9))
+
     if p1_locked and p2_locked:
         ready = font_medium.render("BOTH SIDES READY - PRESS ENTER", True, GREEN)
         surface.blit(ready, (WIDTH // 2 - ready.get_width() // 2, 545))
@@ -1142,7 +1424,7 @@ def draw_character_select(surface):
 def draw_controls_ui(surface):
     p1_text = [
         "P1: [A/D] Move [W] Jump [S] Crouch",
-        "Hold backward to block | [S+F] Low Attack",
+        "[LEFT SHIFT] Block or hold backward | [S+F] Low Attack",
         "[F] Punch [R] Kick [G] Fireball [T] Dash [H] Ultimate",
     ]
     if vs_cpu:
@@ -1153,7 +1435,7 @@ def draw_controls_ui(surface):
     else:
         p2_text = [
             "P2: [<- ->] Move [UP] Jump [DOWN] Crouch",
-            "Hold backward to block | [DOWN+P] Low Attack",
+            "[RIGHT SHIFT] Block or hold backward | [DOWN+P] Low Attack",
             "[P] Punch [O] Kick [[] Fireball [U] Dash []] Ultimate",
         ]
 
@@ -1277,15 +1559,15 @@ def draw_fight_scene(surface):
     if should_update_game:
         if not controls_locked:
             keys = pygame.key.get_pressed()
-            p1.move(keys[pygame.K_a], keys[pygame.K_d], keys[pygame.K_w], keys[pygame.K_s], p2)
+            p1.move(keys[pygame.K_a], keys[pygame.K_d], keys[pygame.K_w], keys[pygame.K_s], p2, keys[pygame.K_LSHIFT])
 
             if vs_cpu:
                 cpu_control(p2, p1)
             else:
-                p2.move(keys[pygame.K_LEFT], keys[pygame.K_RIGHT], keys[pygame.K_UP], keys[pygame.K_DOWN], p1)
+                p2.move(keys[pygame.K_LEFT], keys[pygame.K_RIGHT], keys[pygame.K_UP], keys[pygame.K_DOWN], p1, keys[pygame.K_RSHIFT])
         else:
-            p1.move(False, False, False, False, p2)
-            p2.move(False, False, False, False, p1)
+            p1.move(False, False, False, False, p2, False)
+            p2.move(False, False, False, False, p1, False)
 
         p1.update()
         p2.update()
@@ -1372,6 +1654,9 @@ def draw_fight_scene(surface):
     surface.blit(ult1, (255, 72))
     surface.blit(ult2, (720, 72))
 
+    map_label = font_small.render("MAP: " + STAGES[current_stage]["name"], True, LIGHT_GRAY)
+    surface.blit(map_label, (WIDTH // 2 - map_label.get_width() // 2, 63))
+
     draw_round_icons(surface)
     draw_round_timer(surface)
     draw_controls_ui(surface)
@@ -1398,7 +1683,7 @@ def draw_fight_scene(surface):
 # ---------- Main loop ----------
 async def main():
     global game_state, p1_selection, p2_selection, p1_locked, p2_locked
-    global vs_cpu, cpu_difficulty, fireballs
+    global vs_cpu, cpu_difficulty, fireballs, stage_selection
 
     while True:
         update_screen_shake()
@@ -1425,6 +1710,14 @@ async def main():
                         order = ["EASY", "NORMAL", "HARD"]
                         idx = order.index(cpu_difficulty)
                         cpu_difficulty = order[(idx + 1) % len(order)]
+                        play_sound(SND_MENU)
+
+                    if event.key == pygame.K_q:
+                        stage_selection = (stage_selection - 1) % len(STAGES)
+                        play_sound(SND_MENU)
+
+                    if event.key == pygame.K_e:
+                        stage_selection = (stage_selection + 1) % len(STAGES)
                         play_sound(SND_MENU)
 
                     if not p1_locked:
@@ -1469,25 +1762,8 @@ async def main():
                         if event.key == pygame.K_t:
                             p1.dash(keys[pygame.K_a], keys[pygame.K_d])
 
-                        if event.key == pygame.K_g and p1.stamina >= p1.fireball_cost:
-                            p1.stamina -= p1.fireball_cost
-                            fireball_speed = 14
-                            fireball_w = 40
-                            fireball_h = 20
-
-                            if p1.special == "strong_fireball":
-                                fireball_speed = 16
-                                fireball_w = 55
-                                fireball_h = 24
-
-                            fireballs.append({
-                                "rect": pygame.Rect(p1.rect.centerx, p1.rect.y + 40, fireball_w, fireball_h),
-                                "vx": (1 if p1.facing_right else -1) * fireball_speed,
-                                "owner": p1,
-                                "damage": p1.fireball_damage,
-                                "kind": "normal",
-                            })
-                            play_sound(SND_FIREBALL)
+                        if event.key == pygame.K_g:
+                            p1.shoot_fireball(fireballs)
 
                         if event.key == pygame.K_h:
                             p1.use_ultimate(fireballs)
@@ -1503,25 +1779,8 @@ async def main():
                             if event.key == pygame.K_u:
                                 p2.dash(keys[pygame.K_LEFT], keys[pygame.K_RIGHT])
 
-                            if event.key == pygame.K_LEFTBRACKET and p2.stamina >= p2.fireball_cost:
-                                p2.stamina -= p2.fireball_cost
-                                fireball_speed = 14
-                                fireball_w = 40
-                                fireball_h = 20
-
-                                if p2.special == "strong_fireball":
-                                    fireball_speed = 16
-                                    fireball_w = 55
-                                    fireball_h = 24
-
-                                fireballs.append({
-                                    "rect": pygame.Rect(p2.rect.centerx, p2.rect.y + 40, fireball_w, fireball_h),
-                                    "vx": (1 if p2.facing_right else -1) * fireball_speed,
-                                    "owner": p2,
-                                    "damage": p2.fireball_damage,
-                                    "kind": "normal",
-                                })
-                                play_sound(SND_FIREBALL)
+                            if event.key == pygame.K_LEFTBRACKET:
+                                p2.shoot_fireball(fireballs)
 
                             if event.key == pygame.K_RIGHTBRACKET:
                                 p2.use_ultimate(fireballs)
